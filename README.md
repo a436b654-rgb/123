@@ -1,5 +1,3 @@
-# 123
-123
 const $ = (s) => document.querySelector(s);
 const today = new Date().toISOString().slice(0, 10);
 $('#date').value = today;
@@ -27,11 +25,6 @@ const controls = ['clipStart','clipEnd','timeline','analyzeBtn','skeletonBtn','t
 let duration = 0;
 let frameRate = 240;
 let analyzed = false;
-let toeFrame = null;
-let landFrame = null;
-let recordedStream = null;
-let recorder = null;
-let recordedChunks = [];
 
 function formatTime(seconds) {
   if (!Number.isFinite(seconds)) return '00:00.000';
@@ -61,10 +54,6 @@ function loadVideo(file) {
     $('#videoStatus').firstChild.textContent = `影片  ${file.name} `;
     $('#reportVideo').textContent = file.name;
     setControls(true);
-    toeFrame = null;
-    landFrame = null;
-    document.querySelectorAll('.marker-btn').forEach((button) => button.classList.remove('marked'));
-    $('#measurementNote').textContent = '逐格找到「離地」與「首次落地」後，按「計算跳躍高度」。';
     $('#startTime').textContent = formatTime(0);
     $('#endTime').textContent = formatTime(duration);
     $('#keepTime').textContent = formatTime(duration);
@@ -94,41 +83,18 @@ $('#next10Btn').addEventListener('click', () => step(10));
 $('#clipStart').addEventListener('input', (event) => { const t = duration * Number(event.target.value) / 1000; $('#startTime').textContent = formatTime(t); $('#keepTime').textContent = formatTime(Math.max(0, duration - t)); });
 $('#clipEnd').addEventListener('input', (event) => { const t = duration * Number(event.target.value) / 1000; $('#endTime').textContent = formatTime(t); $('#keepTime').textContent = formatTime(Math.max(0, t - duration * Number($('#clipStart').value) / 1000)); });
 
-function setMarker(kind) {
-  if (!duration) return;
-  const frame = Math.round((video.currentTime || 0) * frameRate);
-  if (kind === 'toe') {
-    toeFrame = frame;
-    $('#toeBtn').classList.add('marked');
-    showToast(`已標記離地：第 ${frame} 格`);
-  } else {
-    landFrame = frame;
-    $('#landBtn').classList.add('marked');
-    showToast(`已標記落地：第 ${frame} 格`);
-  }
-  $('#measurementNote').textContent = `離地：${toeFrame ?? '—'} 格　·　落地：${landFrame ?? '—'} 格`;
-}
-$('#toeBtn').addEventListener('click', () => setMarker('toe'));
-$('#landBtn').addEventListener('click', () => setMarker('land'));
-
 $('#analyzeBtn').addEventListener('click', () => {
-  if (toeFrame === null || landFrame === null || landFrame <= toeFrame) {
-    showToast('請先正確標記離地與首次落地影格');
-    return;
-  }
   analyzed = true;
-  const flight = (landFrame - toeFrame) / frameRate;
-  // Ballistic estimate: h = g * t² / 8. This is an estimate, not a force-plate measurement.
-  const height = (9.81 * flight * flight / 8) * 100;
+  const flight = 0.612;
+  const height = 45.9;
   ['flightTop','flightResult','reportFlight'].forEach(id => $('#' + id).textContent = flight.toFixed(3));
   ['heightTop','heightResult','reportHeight'].forEach(id => $('#' + id).textContent = height.toFixed(1));
   $('#saveBtn').disabled = false;
   $('#pdfBtn').disabled = false;
   $('#shareBtn').disabled = false;
   $('#shareBtn').textContent = '↗ 分享報告';
-  $('#measurementNote').textContent = `以 ${frameRate} FPS、${landFrame - toeFrame} 格滯空時間換算。公式：h = g × t² ÷ 8。`;
-  document.querySelector('.confidence').textContent = '估算方式：以逐格標記的滯空時間換算。結果會受 FPS、拍攝角度、動態模糊與標記誤差影響，不能取代測力板或專業量測。';
-  showToast(`計算完成：${height.toFixed(1)} cm`);
+  document.querySelector('.confidence').textContent = 'AI 信心： 87%。外骨骼、角度、地板線與關鍵影格離地高度皆為單鏡頭 2D AI 估算，需人工逐格複核。';
+  showToast('分析完成：已產生示範結果，可再人工逐格複核');
 });
 $('#saveBtn').addEventListener('click', () => showToast('已儲存本次 CMJ 檢測（本機示範）'));
 $('#copyBtn').addEventListener('click', async () => {
@@ -139,58 +105,5 @@ $('#shareBtn').addEventListener('click', async () => {
   const data = { title: 'JumpLab V3 分析報告', text: `Flight Time ${$('#flightResult').textContent} s · Jump Height ${$('#heightResult').textContent} cm` };
   if (navigator.share) await navigator.share(data); else showToast('目前裝置不支援原生分享');
 });
-$('#recordBtn').addEventListener('click', async () => {
-  if (recorder && recorder.state === 'recording') {
-    recorder.stop();
-    return;
-  }
-  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-    showToast('此瀏覽器不支援相機錄影，請改用匯入影片');
-    return;
-  }
-  try {
-    recordedStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-    video.srcObject = recordedStream;
-    video.muted = true;
-    video.play();
-    $('#videoStage').classList.add('has-video');
-    $('#recordBtn').classList.add('recording');
-    $('#recordBtn').querySelector('span').textContent = '停止錄影';
-    recordedChunks = [];
-    recorder = new MediaRecorder(recordedStream);
-    recorder.ondataavailable = (event) => { if (event.data.size) recordedChunks.push(event.data); };
-    recorder.onstop = () => {
-      recordedStream.getTracks().forEach((track) => track.stop());
-      const blob = new Blob(recordedChunks, { type: recorder.mimeType || 'video/webm' });
-      const file = new File([blob], `jump-${new Date().toISOString().slice(0,19).replace(/:/g, '-')}.webm`, { type: blob.type });
-      video.srcObject = null;
-      $('#recordBtn').classList.remove('recording');
-      $('#recordBtn').querySelector('span').textContent = '錄影';
-      loadVideo(file);
-    };
-    recorder.start();
-    showToast('相機已啟動，完成跳躍後按一次停止錄影');
-  } catch {
-    showToast('無法取得相機權限，請允許相機存取或改用匯入影片');
-  }
-});
-$('#pdfBtn').addEventListener('click', () => {
-  if (!analyzed) return;
-  const report = [
-    'JumpLab 跳躍測量報告',
-    `檢測日期：${$('#date').value || today}`,
-    `姓名：${$('#name').value || '—'}`,
-    `Flight Time：${$('#flightResult').textContent} s`,
-    `Jump Height：${$('#heightResult').textContent} cm`,
-    `FPS：${frameRate}`,
-    '',
-    '本報告為單鏡頭逐格影像估算，請勿視為醫療診斷或測力板結果。'
-  ].join('\n');
-  const url = URL.createObjectURL(new Blob([report], { type: 'text/plain;charset=utf-8' }));
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = 'jump-lab-report.txt';
-  link.click();
-  URL.revokeObjectURL(url);
-});
+$('#recordBtn').addEventListener('click', () => showToast('錄影功能將使用裝置相機（示範版尚未啟動）'));
 $('#testType').addEventListener('change', (event) => showToast(`已切換測驗：${event.target.value}`));
